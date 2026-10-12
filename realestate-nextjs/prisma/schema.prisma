@@ -1,0 +1,116 @@
+// Prisma schema: Next.js port of the realestate-agent data model.
+// Every table is tenant-scoped (tenantId): tenant isolation is enforced
+// in code on every query (see lib/tenants.ts).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id            String   @id @default(cuid())
+  slug          String   @unique
+  displayName   String
+  mailbox       String
+  domainPack    String   @default("real_estate")
+  confidenceThreshold Float @default(0.7)
+  revoked       Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  secrets  VaultSecret[]
+  emails   EmailMessage[]
+  drafts   Draft[]
+  logs     LogEntry[]
+  sheets   SheetCache[]
+}
+
+model VaultSecret {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key       String   // e.g. "gemini_api_key", "google_oauth_tokens"
+  ciphertext String  // AES-256-GCM blob, base64 (iv|tag|enc)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+}
+
+model EmailMessage {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  gmailId     String
+  threadId    String
+  subject     String   @default("")
+  fromAddr    String   @default("")
+  date        String   @default("")
+  category    String   @default("")
+  confidence  Float    @default(0)
+  status      String   @default("queued") // queued|processed|human_review|noise_logged|draft_failed|error|dead_letter
+  retryCount  Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, gmailId])
+  @@index([tenantId, status])
+}
+
+model Draft {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  emailId     String
+  gmailDraftId String  @default("")
+  to          String   @default("")
+  subject     String   @default("")
+  body        String   @default("")
+  internalNote String  @default("")
+  flags       String[] @default([])
+  reused      Boolean  @default(false)
+  reviewStatus String  @default("pending") // pending|approved|rejected (human oversight)
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, reviewStatus])
+}
+
+model LogEntry {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  timestamp   DateTime @default(now())
+  messageId   String
+  category    String   @default("")
+  confidence  Float    @default(0)
+  contactName String   @default("")
+  contactEmail String  @default("")
+  address     String   @default("")
+  crossRef    String   @default("")
+  flags       String[] @default([])
+  draftId     String   @default("")
+  retryCount  Int      @default(0)
+  status      String   @default("")
+  internalNote String  @default("")
+
+  @@index([tenantId, timestamp])
+  @@index([tenantId, status])
+}
+
+/// Cached reference rows (Leads / Properties tabs) per tenant.
+/// The live Sheets API remains the source of truth; this cache lets the
+/// dashboard and tests run without Google credentials.
+model SheetCache {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  role      String   // "contacts" | "entities"
+  rows      Json     @default("[]")
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, role])
+}
